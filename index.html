@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Levantamento Ambiental SST</title>
+
+    <!-- CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <main id="areaPDF">
+
+<!-- CABEÇALHO -->
+<div class="header">
+    <div>
+        <h1>LEVANTAMENTO AMBIENTAL</h1>
+        <h2>SEGURANÇA DO TRABALHO</h2>
+    </div>
+
+    <div class="data-visita">
+        Data da Visita: <input type="date" id="dataVisita">
+    </div>
+</div>
+
+<!-- 1. DADOS DA EMPRESA -->
+<div
+class="container"
+id="dadosEmpresa">
+    <div class="titulo">1. DADOS DA EMPRESA</div>
+
+    <div class="grid-2">
+        <div>
+
+            <label for="razaoSocial">
+    Razão Social
+        </label>
+<input type="text" id="razaoSocial" placeholder="Digite a razão social...">
+
+        </div>
+
+        <div>
+            <label>CNPJ</label>
+            <input type="text" id="cnpj" placeholder="Digite o CNPJ...">
+        </div>
+
+        <div>
+            <label>Contabilidade</label>
+            <input type="text" id="contabilidade" placeholder="Digite o nome da contabilidade...">
+        </div>
+
+        <div>
+            <label>Contato</label>
+            <input type="text" id="contato" placeholder="Digite o Contato da Empresa...">
+        </div>
+    </div>
+
+    <div class="grid-1">
+        <label>Responsável pela Mensuração</label>
+        <input type="text" id="responsavelVisita" placeholder="Digite seu nome...">
+    </div>
+
+    <div class="grid-1">
+        <label>Acompanhante Empresa</label>
+        <input type="text" id="acompanhanteEmpresa" placeholder="Digite nome do acompanhante...">
+    </div>
+</div>
+
+<!-- 2. SEGURANÇA -->
+<div
+class="container"
+id="seguranca">
+    <div class="titulo">2. INFORMAÇÕES DE SEGURANÇA</div>
+
+        <h4>Avaliação Quantitativa</h4>
+
+    <div class="alternativas">
+    <label><input type="checkbox" id="vci" name="avaliacao[]" value="vci"> V.C.I.</label>
+    <label><input type="checkbox" id="vmb" name="avaliacao[]" value="vmb"> V.M.B.</label>
+    <label><input type="checkbox" id="calor" name="avaliacao[]" value="calor"> Calor</label>
+    <label><input type="checkbox" id="ruido" name="avaliacao[]" value="ruido"> Ruído</label>
+    <label><input type="checkbox" id="quimicos" name="avaliacao[]" value="quimicos"> Químicos</label></div>
+
+    <h4>Possui AVCB?</h4>
+<label><input type="radio" name="avcb" value="sim"> Sim</label>
+<label><input type="radio" name="avcb" value="nao"> Não</label>
+
+<br>
+
+<label>
+Data de Vencimento <br>
+<input type="date" id="vencimentoAvcb" class="data-avcb">
+</label>
+
+    <h4>Possui PMOC?</h4>
+        <label><input type="radio" name="pmoc" value="sim"> Sim</label>
+        <label><input type="radio" name="pmoc" value="nao"> Não</label>
+
+    <h4>Possui Compressor?</h4>
+        <label><input type="radio" name="compressor" value="sim"> Sim</label>
+        <label><input type="radio" name="compressor" value="nao"> Não</label>
+    </div>
+
+<!-- 3. MEDIÇÕES -->
+    <div
+    class="container"
+    id="medicoes">
+    <div class="titulo">3. MENSURAÇÃO</div>
+<table>
+    <thead>
+        <tr>
+            <th>Nº</th>
+            <th>Setor</th>
+            <th>Descrição</th>
+            <th>Lux</th>
+            <th>dB(A)</th>
+            <th>°C</th>
+            <th>Obs</th>
+            <th></th>
+        </tr>
+    </thead>
+
+    <tbody id="tabela-setores">
+
+        <tr>
+
+            <td>1</td>
+
+            <td contenteditable="true"></td>
+
+            <td contenteditable="true"></td>
+
+            <!-- LUX -->
+            <td class="campo-arquivo upload-slot">
+
+                <div contenteditable="true" class="editavel"></div>
+
+                <label class="btn-arquivo">
+                    📎
+                    <input type="file" accept="image/*" capture="environment" hidden>
+                </label>
+
+            </td>
+
+            <!-- RUÍDO -->
+            <td class="campo-arquivo upload-slot">
+
+                <div contenteditable="true" class="editavel"></div>
+
+                <label class="btn-arquivo">
+                    📎
+                    <input type="file" accept="image/*" capture="environment" hidden>
+                </label>
+
+            </td>
+
+            <!-- TEMPERATURA -->
+            <td class="campo-arquivo upload-slot">
+
+                <div contenteditable="true" class="editavel"></div>
+
+                <label class="btn-arquivo">
+                    📎
+                    <input type="file" accept="image/*" capture="environment" hidden>
+                </label>
+
+            </td>
+
+            <td contenteditable="true"></td>
+
+            <td>
+                <button onclick="removerLinha(this)">
+                    X
+                </button>
+            </td>
+
+        </tr>
+
+    </tbody>
+</table>
+
+<button onclick="adicionarSetor()">
+    + Adicionar Setor
+</button>
+    </div>
+
+<!-- 4. EXTINTORES -->
+    <div
+    class="container"
+    id="extintores">
+    <div class="titulo">4. EXTINTORES DE INCÊNDIO</div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Nº</th>
+                <th>Local</th>
+                <th>Tipo / Capacidade</th>
+                <th>Qtd</th>
+                <th>Vencimento</th>
+                <th>Obs</th>
+                <th></th>
+            </tr>
+        </thead>
+
+        <tbody id="tabela-extintores">
+            <tr>
+                <td>1</td>
+                <td class="campo-arquivo upload-slot">
+
+        <div contenteditable="true" class="editavel"></div>
+
+        <label class="btn-arquivo">
+            📎
+            <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                hidden
+            >
+        </label>
+
+    </td>
+                <td contenteditable="true"></td>
+                <td contenteditable="true"></td>
+                <td contenteditable="true"></td>
+                <td contenteditable="true"></td>
+                <td><button onclick="removerLinha(this)">X</button></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <button onclick="adicionarExtintor()">+ Adicionar Extintor</button>
+</div>
+
+<!-- 5. BANHEIROS -->
+
+<div class="container">
+    <div class="titulo">
+        5. BANHEIROS (NR-24)
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Foto</th>
+                <th>Observação</th>
+                <th></th>
+            </tr>
+        </thead>
+
+        <tbody id="tabela-banheiros">
+            <tr>
+                <td class="campo-arquivo-grande upload-slot">
+                    <label class="btn-foto-grande">
+                        📎
+                        <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            hidden
+                        >
+                    </label>
+                </td>
+                <td contenteditable="true"></td>
+
+                <td>
+                    <button onclick="removerLinha(this)">
+                        X
+                    </button>
+                </td>
+            </tr>
+        </tbody>
+
+    </table>
+
+    <button onclick="adicionarBanheiro()">
+        + Adicionar Banheiro
+    </button>
+
+</div>
+
+<!-- 6. BEBEDOUROS -->
+
+<div class="container">
+    <div class="titulo">
+        6. BEBEDOUROS
+    </div>
+    <table>
+
+        <thead>
+            <tr>
+                <th>Foto</th>
+                <th>Observação</th>
+                <th></th>
+            </tr>
+        </thead>
+
+        <tbody id="tabela-bebedouros">
+            <tr>
+                <td class="campo-arquivo-grande upload-slot">
+                    <label class="btn-foto-grande">
+                        📎
+                        <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            hidden
+                        >
+                    </label>
+
+                </td>
+
+                <td contenteditable="true"></td>
+                <td>
+                    <button onclick="removerLinha(this)">
+                        X
+                    </button>
+                </td>
+            </tr>
+        </tbody>
+
+    </table>
+
+    <button onclick="adicionarBebedouro()">
+        + Adicionar Bebedouro
+    </button>
+
+</div>
+
+<!-- 7. OBSERVAÇÕES -->
+<div class="container" id="secao-observacoes">
+    <div class="titulo">7. OBSERVAÇÕES GERAIS</div>
+
+    <textarea
+        id="observacoes"
+        placeholder="Digite observações gerais..."
+    ></textarea>
+
+    <div class="fotos-observacoes">
+        <h4>Fotos</h4>
+
+        <div class="grade-fotos" id="galeria-observacoes">
+            <!-- fotos adicionadas dinamicamente via JS -->
+        </div>
+
+        <button onclick="adicionarFotoObservacao()">+ Adicionar Foto</button>
+    </div>
+</div>
+
+<!-- BOTÕES -->
+<div class="container" style="text-align:center;">
+    <button id="btnGerarPdf" onclick="gerarPDF()">
+    📄 Baixar PDF
+    </button>
+</div>
+
+</main>
+
+<!-- JS -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="script.js"></script>
+
+</body>
+</html>
