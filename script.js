@@ -1,7 +1,6 @@
 // ======================================
 // LEVANTAMENTO AMBIENTAL SST
 // Desenvolvido por Izabelly
-// Versão 1.3 (galeria de fotos em observações)
 // ======================================
 
 "use strict";
@@ -45,8 +44,6 @@ function campoIgnoravel(campo) {
 
 // ======================================
 // UPLOAD DE IMAGENS (ÚNICO)
-// Funciona em qualquer container marcado com a classe "upload-slot"
-// (células de tabela ou os cards da galeria de observações)
 // ======================================
 
 function criarOuObterImagem(container) {
@@ -284,7 +281,6 @@ function restaurarTabelaSetores() {
 
 // ======================================
 // TABELAS SIMPLES (BANHEIROS E BEBEDOUROS)
-// Estrutura idêntica: foto + observação + remover
 // ======================================
 
 function criarLinhaSimples(dados = {}) {
@@ -366,8 +362,6 @@ function restaurarTabelaBebedouros() { restaurarTabelaSimples("tabela-bebedouros
 
 // ======================================
 // GALERIA DE FOTOS - OBSERVAÇÕES GERAIS
-// Cards em grade, sem numeração/observação individual,
-// tamanho padronizado via CSS (.foto-obs)
 // ======================================
 
 function criarCardFotoObservacao(imagemBase64 = "") {
@@ -440,8 +434,6 @@ function restaurarFotosObservacoes() {
 
 // ======================================
 // AUTO-AJUSTE DE ALTURA DO TEXTAREA
-// Garante que o texto digitado nunca fique escondido dentro da
-// caixa (nem na tela, nem na hora de imprimir/gerar o PDF)
 // ======================================
 
 function autoAjustarTextarea(campo) {
@@ -522,6 +514,53 @@ function restaurarDados() {
 }
 
 // ======================================
+// SUBSTITUIÇÃO TEMPORÁRIA DE TEXTAREA POR DIV (SÓ NA GERAÇÃO DO PDF)
+// ======================================
+
+
+function substituirTextareasPorDivs(container) {
+    const substituicoes = [];
+
+    container.querySelectorAll("textarea").forEach(textarea => {
+        const estilo = window.getComputedStyle(textarea);
+        const div = document.createElement("div");
+
+        // pre-wrap preserva as quebras de linha que o usuário digitou
+        // e ainda quebra automaticamente linhas compridas, igual a textarea
+        div.style.whiteSpace = "pre-wrap";
+        div.style.wordBreak = "break-word";
+        div.style.boxSizing = estilo.boxSizing;
+        div.style.width = estilo.width;
+        div.style.minHeight = estilo.minHeight;
+        div.style.padding = estilo.padding;
+        div.style.border = estilo.border;
+        div.style.borderRadius = estilo.borderRadius;
+        div.style.fontFamily = estilo.fontFamily;
+        div.style.fontSize = estilo.fontSize;
+        div.style.lineHeight = estilo.lineHeight;
+        div.style.color = estilo.color;
+        div.style.backgroundColor = estilo.backgroundColor;
+
+        div.textContent = textarea.value || "";
+
+        textarea.insertAdjacentElement("afterend", div);
+        textarea.style.display = "none";
+
+        substituicoes.push({ textarea, div });
+    });
+
+    return substituicoes;
+}
+
+// Remove as divs temporárias e devolve as textareas editáveis ao normal
+function restaurarTextareas(substituicoes) {
+    substituicoes.forEach(({ textarea, div }) => {
+        div.remove();
+        textarea.style.display = "";
+    });
+}
+
+// ======================================
 // PDF
 // ======================================
 
@@ -534,9 +573,7 @@ function gerarPDF() {
         botao.textContent = "⏳ Gerando PDF...";
     }
 
-    // Esconde botões e ícones de anexo removendo-os de verdade do
-    // layout (display:none) só durante a geração, para não sobrar
-    // espaço vazio nem "fantasma" no cálculo de altura do PDF
+
     const elementosOcultos = areaPDF.querySelectorAll("button, .btn-arquivo");
     const estilosOriginais = [];
 
@@ -545,10 +582,15 @@ function gerarPDF() {
         el.style.display = "none";
     });
 
+
+    const substituicoesTextarea = substituirTextareasPorDivs(areaPDF);
+
     const restaurar = () => {
         elementosOcultos.forEach((el, indice) => {
             el.style.display = estilosOriginais[indice];
         });
+
+        restaurarTextareas(substituicoesTextarea);
 
         if (botao) {
             botao.disabled = false;
@@ -556,28 +598,17 @@ function gerarPDF() {
         }
     };
 
-    try {
-        const { jsPDF } = window.jspdf;
 
-        const documentoPdf = new jsPDF({
-            unit: "mm",
-            format: "a4",
-            orientation: "portrait",
-            compress: true
-        });
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        const escala = 2; // resolução da captura (mantém o PDF nítido)
 
-        const larguraPagina = 190; // 210mm (A4) menos 10mm de margem de cada lado
-
-        documentoPdf
-            .html(areaPDF, {
-                margin: [10, 10, 10, 10],
-                autoPaging: "text",
-                width: larguraPagina,
-                windowWidth: areaPDF.scrollWidth,
-                html2canvas: { useCORS: true }
-            })
-            .then(() => {
-                documentoPdf.save("relatorio_sst.pdf");
+        html2canvas(areaPDF, {
+            scale: escala,
+            useCORS: true,
+            windowWidth: areaPDF.scrollWidth
+        })
+            .then((canvas) => {
+                montarPdfComQuebrasSeguras(canvas, escala);
                 restaurar();
             })
             .catch((erro) => {
@@ -585,11 +616,79 @@ function gerarPDF() {
                 restaurar();
                 alert("Não foi possível gerar o PDF. Tente novamente.");
             });
-    } catch (erro) {
-        console.error("Erro ao gerar PDF:", erro);
-        restaurar();
-        alert("Não foi possível gerar o PDF. Tente novamente.");
+    }));
+}
+
+
+function montarPdfComQuebrasSeguras(canvas, escala) {
+    const { jsPDF } = window.jspdf;
+
+    const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
+
+    const margem = 10;
+    const larguraUtil = 210 - margem * 2;
+    const alturaUtilMm = 297 - margem * 2;
+
+    const pxPorMm = canvas.width / larguraUtil;
+    const alturaPaginaPx = alturaUtilMm * pxPorMm;
+
+    const quebrasSeguras = calcularQuebrasSeguras(areaPDF, escala);
+
+    let yAtual = 0;
+    let primeiraPagina = true;
+
+    while (yAtual < canvas.height - 1) {
+        let limitePagina = Math.min(yAtual + alturaPaginaPx, canvas.height);
+
+        if (limitePagina < canvas.height) {
+            // Procura o ponto de corte seguro mais próximo do limite da
+            // página, sem ultrapassá-lo. Se não achar nenhum (ex: uma
+            // seção maior que uma página inteira), corta no limite mesmo.
+            const candidatos = quebrasSeguras.filter(q => q > yAtual + 5 && q <= limitePagina);
+            if (candidatos.length > 0) {
+                limitePagina = candidatos[candidatos.length - 1];
+            }
+        }
+
+        const alturaFatiaPx = Math.max(1, Math.round(limitePagina - yAtual));
+
+        const canvasFatia = document.createElement("canvas");
+        canvasFatia.width = canvas.width;
+        canvasFatia.height = alturaFatiaPx;
+
+        canvasFatia.getContext("2d").drawImage(
+            canvas,
+            0, yAtual, canvas.width, alturaFatiaPx,
+            0, 0, canvas.width, alturaFatiaPx
+        );
+
+        const imagemFatia = canvasFatia.toDataURL("image/jpeg", 0.85);
+        const alturaFatiaMm = alturaFatiaPx / pxPorMm;
+
+        if (!primeiraPagina) pdf.addPage();
+        pdf.addImage(imagemFatia, "JPEG", margem, margem, larguraUtil, alturaFatiaMm);
+
+        primeiraPagina = false;
+        yAtual = limitePagina;
     }
+
+    pdf.save("relatorio_sst.pdf");
+}
+
+
+function calcularQuebrasSeguras(container, fatorEscala) {
+    const elementos = container.querySelectorAll(".container, tr, .foto-obs-card");
+    const topoContainer = container.getBoundingClientRect().top;
+
+    const quebras = new Set([0]);
+
+    elementos.forEach(el => {
+        const rect = el.getBoundingClientRect();
+        quebras.add(Math.round((rect.top - topoContainer) * fatorEscala));
+        quebras.add(Math.round((rect.bottom - topoContainer) * fatorEscala));
+    });
+
+    return Array.from(quebras).sort((a, b) => a - b);
 }
 
 // ======================================
