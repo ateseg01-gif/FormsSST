@@ -1,6 +1,7 @@
 // ======================================
 // LEVANTAMENTO AMBIENTAL SST
 // Desenvolvido por Izabelly
+// Versão 1.4 (imagens migradas para IndexedDB)
 // ======================================
 
 "use strict";
@@ -33,6 +34,12 @@ function removerLinha(botao) {
     const linha = botao.closest("tr");
     if (!linha) return;
 
+    // Evita deixar imagens órfãs no IndexedDB/localStorage quando a
+    // linha (e as fotos associadas a ela) são removidas.
+    linha.querySelectorAll("input[type='file']").forEach(input => {
+        if (input.dataset.imgId) removerImagem(input.dataset.imgId);
+    });
+
     linha.remove();
     atualizarNumeracao();
     salvarAutomaticamente();
@@ -43,7 +50,192 @@ function campoIgnoravel(campo) {
 }
 
 // ======================================
+// ARMAZENAMENTO DE IMAGENS (IndexedDB, com fallback em localStorage)
+// Cada foto é identificada por um ID estável (data-img-id no input),
+// gerado uma única vez e reaproveitado enquanto a foto existir.
+// Isso evita depender da posição do campo na página para restaurar
+// a imagem correta (o que quebrava ao adicionar/remover linhas).
+// ======================================
+
+const DB_NOME = "levantamentoSST";
+const DB_VERSAO = 1;
+const STORE_IMAGENS = "imagens";
+const CHAVE_FALLBACK_IMAGENS = "imagensFallbackSST";
+const CHAVE_LEGADO_POSICIONAL = "imagensSST";
+
+let indexedDBDisponivel = "indexedDB" in window;
+let dbPromise = null;
+
+function gerarIdImagem() {
+    if (window.crypto && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    return "img-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+function abrirBanco() {
+    if (!indexedDBDisponivel) {
+        return Promise.reject(new Error("IndexedDB indisponível neste navegador."));
+    }
+
+    if (dbPromise) return dbPromise;
+
+    dbPromise = new Promise((resolve, reject) => {
+        let requisicao;
+
+        try {
+            requisicao = indexedDB.open(DB_NOME, DB_VERSAO);
+        } catch (erro) {
+            indexedDBDisponivel = false;
+            reject(erro);
+            return;
+        }
+
+        requisicao.onupgradeneeded = () => {
+            const db = requisicao.result;
+            if (!db.objectStoreNames.contains(STORE_IMAGENS)) {
+                db.createObjectStore(STORE_IMAGENS);
+            }
+        };
+
+        requisicao.onsuccess = () => resolve(requisicao.result);
+
+        requisicao.onerror = () => {
+            indexedDBDisponivel = false;
+            reject(requisicao.error);
+        };
+
+        requisicao.onblocked = () => {
+            console.warn("Abertura do IndexedDB bloqueada (outra aba pode estar usando uma versão antiga do banco).");
+        };
+    });
+
+    return dbPromise;
+}
+
+function salvarImagemIDB(id, blob) {
+    return abrirBanco().then(db => new Promise((resolve, reject) => {
+        const transacao = db.transaction(STORE_IMAGENS, "readwrite");
+        transacao.objectStore(STORE_IMAGENS).put(blob, id);
+        transacao.oncomplete = () => resolve();
+        transacao.onerror = () => reject(transacao.error);
+    }));
+}
+
+function obterImagemIDB(id) {
+    return abrirBanco().then(db => new Promise((resolve, reject) => {
+        const transacao = db.transaction(STORE_IMAGENS, "readonly");
+        const requisicao = transacao.objectStore(STORE_IMAGENS).get(id);
+        requisicao.onsuccess = () => resolve(requisicao.result || null);
+        requisicao.onerror = () => reject(requisicao.error);
+    }));
+}
+
+function removerImagemIDB(id) {
+    return abrirBanco().then(db => new Promise((resolve, reject) => {
+        const transacao = db.transaction(STORE_IMAGENS, "readwrite");
+        transacao.objectStore(STORE_IMAGENS).delete(id);
+        transacao.oncomplete = () => resolve();
+        transacao.onerror = () => reject(transacao.error);
+    }));
+}
+
+// Converte a dataURL (base64) já comprimida em Blob, para não guardar
+// a imagem como uma string enorme dentro do IndexedDB.
+function dataURLParaBlob(dataUrl) {
+    const [cabecalho, base64] = dataUrl.split(",");
+    const mimeEncontrado = cabecalho.match(/:(.*?);/);
+    const mime = mimeEncontrado ? mimeEncontrado[1] : "image/jpeg";
+
+    const binario = atob(base64);
+    const bytes = new Uint8Array(binario.length);
+    for (let i = 0; i < binario.length; i++) {
+        bytes[i] = binario.charCodeAt(i);
+    }
+
+    return new Blob([bytes], { type: mime });
+}
+
+function obterMapaFallback() {
+    try {
+        return JSON.parse(localStorage.getItem(CHAVE_FALLBACK_IMAGENS)) || {};
+    } catch (erro) {
+        return {};
+    }
+}
+
+function salvarImagemFallback(id, dataUrl) {
+    const mapa = obterMapaFallback();
+    mapa[id] = dataUrl;
+
+    try {
+        localStorage.setItem(CHAVE_FALLBACK_IMAGENS, JSON.stringify(mapa));
+    } catch (erro) {
+        console.warn("Não foi possível salvar a imagem no localStorage (reserva):", erro);
+    }
+}
+
+function removerImagemFallback(id) {
+    const mapa = obterMapaFallback();
+    if (id in mapa) {
+        delete mapa[id];
+        try {
+            localStorage.setItem(CHAVE_FALLBACK_IMAGENS, JSON.stringify(mapa));
+        } catch (erro) {
+            console.warn("Não foi possível atualizar o localStorage (reserva):", erro);
+        }
+    }
+}
+
+function obterImagemFallback(id) {
+    return obterMapaFallback()[id] || null;
+}
+
+// Salva a imagem (dataURL já comprimida) usando o IndexedDB; se ele
+// não existir ou falhar, usa o localStorage como reserva.
+async function salvarImagem(id, dataUrl) {
+    if (!indexedDBDisponivel) {
+        salvarImagemFallback(id, dataUrl);
+        return;
+    }
+
+    try {
+        const blob = dataURLParaBlob(dataUrl);
+        await salvarImagemIDB(id, blob);
+    } catch (erro) {
+        console.warn("Falha ao salvar imagem no IndexedDB, usando localStorage como reserva:", erro);
+        salvarImagemFallback(id, dataUrl);
+    }
+}
+
+// Retorna uma URL utilizável em <img src>: tenta o IndexedDB primeiro
+// (via URL.createObjectURL) e cai para o localStorage se necessário.
+async function obterImagemPorId(id) {
+    if (indexedDBDisponivel) {
+        try {
+            const blob = await obterImagemIDB(id);
+            if (blob) return URL.createObjectURL(blob);
+        } catch (erro) {
+            console.warn("Falha ao ler imagem do IndexedDB, tentando reserva:", erro);
+        }
+    }
+
+    return obterImagemFallback(id);
+}
+
+function removerImagem(id) {
+    if (indexedDBDisponivel) {
+        removerImagemIDB(id).catch(erro =>
+            console.warn("Falha ao remover imagem do IndexedDB:", erro)
+        );
+    }
+    removerImagemFallback(id);
+}
+
+// ======================================
 // UPLOAD DE IMAGENS (ÚNICO)
+// Funciona em qualquer container marcado com a classe "upload-slot"
+// (células de tabela ou os cards da galeria de observações)
 // ======================================
 
 function criarOuObterImagem(container) {
@@ -64,6 +256,21 @@ function criarOuObterImagem(container) {
     }
 
     return img;
+}
+
+// Exibe a imagem no container e prepara o clique para trocar a foto.
+// Libera a URL temporária anterior (blob:) antes de trocar, para não
+// acumular URLs penduradas na memória da página.
+function exibirImagemNoContainer(container, src, input) {
+    const img = criarOuObterImagem(container);
+
+    if (img.src && img.src.startsWith("blob:")) {
+        URL.revokeObjectURL(img.src);
+    }
+
+    img.src = src;
+    img.title = "Clique para trocar a foto";
+    img.onclick = () => input.click();
 }
 
 // Redimensiona e comprime a imagem antes de guardar, para reduzir
@@ -112,15 +319,22 @@ function ativarUploadImagens() {
                 const imagemOriginal = evento.target.result;
                 const imagemBase64 = await comprimirImagem(imagemOriginal);
 
-                this.dataset.imagem = imagemBase64;
-
                 const container = this.closest(".upload-slot");
                 if (!container) return;
 
-                const img = criarOuObterImagem(container);
-                img.src = imagemBase64;
-                img.title = "Clique para trocar a foto";
-                img.onclick = () => this.click();
+                // Mostra a imagem imediatamente na tela, como antes.
+                exibirImagemNoContainer(container, imagemBase64, this);
+
+                // Mantém o mesmo ID se já existir (troca de foto no mesmo
+                // campo) para não deixar a versão antiga órfã no banco.
+                const imgId = this.dataset.imgId || gerarIdImagem();
+                this.dataset.imgId = imgId;
+
+                try {
+                    await salvarImagem(imgId, imagemBase64);
+                } catch (erro) {
+                    console.warn("Falha ao salvar imagem:", erro);
+                }
 
                 salvarAutomaticamente();
             };
@@ -130,35 +344,82 @@ function ativarUploadImagens() {
     });
 }
 
-function restaurarImagens() {
-    const imagens = JSON.parse(localStorage.getItem("imagensSST")) || [];
+// Restaura todas as fotos da página a partir do IndexedDB (ou da
+// reserva em localStorage), usando o ID estável de cada campo.
+// Também migra, de forma automática e silenciosa, dados salvos no
+// formato antigo (antes desta versão):
+//   - setores/extintores: array posicional "imagensSST";
+//   - banheiros/bebedouros/observações: base64 embutido no próprio
+//     item (dataset "legado", preenchido por criarLinhaSimples /
+//     criarCardFotoObservacao).
+async function restaurarImagens() {
+    let legadoPosicional = [];
+    try {
+        legadoPosicional = JSON.parse(localStorage.getItem(CHAVE_LEGADO_POSICIONAL)) || [];
+    } catch (erro) {
+        legadoPosicional = [];
+    }
 
-    document.querySelectorAll("input[type='file']").forEach((input, indice) => {
-        const imagem = imagens[indice];
-        if (!imagem) return;
+    const inputs = document.querySelectorAll("input[type='file']");
+    let precisaResalvar = false;
 
-        input.dataset.imagem = imagem;
-
+    for (let indice = 0; indice < inputs.length; indice++) {
+        const input = inputs[indice];
         const container = input.closest(".upload-slot");
-        if (!container) return;
+        if (!container) continue;
 
-        const img = criarOuObterImagem(container);
-        img.src = imagem;
-        img.title = "Clique para trocar a foto";
-        img.onclick = () => input.click();
-    });
+        if (input.dataset.imgId) {
+            try {
+                const src = await obterImagemPorId(input.dataset.imgId);
+                if (src) exibirImagemNoContainer(container, src, input);
+            } catch (erro) {
+                console.warn("Erro ao restaurar imagem:", erro);
+            }
+            continue;
+        }
+
+        // Sem ID ainda: pode ser um dado salvo no formato antigo.
+        let imagemParaMigrar = null;
+
+        if (input.dataset.legado) {
+            imagemParaMigrar = input.dataset.legado;
+            delete input.dataset.legado;
+        } else if (legadoPosicional[indice]) {
+            imagemParaMigrar = legadoPosicional[indice];
+        }
+
+        if (!imagemParaMigrar) continue;
+
+        const novoId = gerarIdImagem();
+        input.dataset.imgId = novoId;
+        exibirImagemNoContainer(container, imagemParaMigrar, input);
+
+        try {
+            await salvarImagem(novoId, imagemParaMigrar);
+            precisaResalvar = true;
+        } catch (erro) {
+            console.warn("Falha ao migrar imagem antiga:", erro);
+        }
+    }
+
+    if (precisaResalvar) {
+        // Depois de migrar, a chave antiga não é mais necessária e as
+        // tabelas são regravadas já no formato novo (por ID).
+        localStorage.removeItem(CHAVE_LEGADO_POSICIONAL);
+        salvarAutomaticamente();
+    }
 }
 
 // ======================================
 // CAMPO DE ARQUIVO (usado por setores e extintores)
 // ======================================
 
-function campoComArquivo(valor) {
+function campoComArquivo(valor, imgId) {
     return `
         <div contenteditable="true" class="editavel">${valor || ""}</div>
         <label class="btn-arquivo">
             📎
-            <input type="file" accept="image/*" capture="environment" hidden>
+            <input type="file" accept="image/*" capture="environment" hidden${imgId ? ` data-img-id="${imgId}"` : ""}>
         </label>
     `;
 }
@@ -171,7 +432,7 @@ function criarLinhaExtintor(dados = {}) {
     return `
         <tr>
             <td>${dados.numero || tabelaExtintores.rows.length + 1}</td>
-            <td class="campo-arquivo upload-slot">${campoComArquivo(dados.local)}</td>
+            <td class="campo-arquivo upload-slot">${campoComArquivo(dados.local, dados.imgIdLocal)}</td>
             <td contenteditable="true">${dados.tipo || ""}</td>
             <td contenteditable="true">${dados.quantidade || ""}</td>
             <td contenteditable="true">${dados.vencimento || ""}</td>
@@ -200,7 +461,8 @@ function salvarTabelaExtintores() {
             tipo: colunas[2].innerText,
             quantidade: colunas[3].innerText,
             vencimento: colunas[4].innerText,
-            observacao: colunas[5].innerText
+            observacao: colunas[5].innerText,
+            imgIdLocal: colunas[1].querySelector("input[type='file']")?.dataset.imgId || ""
         });
     });
 
@@ -230,9 +492,9 @@ function criarLinhaSetor(dados = {}) {
             <td>${dados.numero || tabelaSetores.rows.length + 1}</td>
             <td contenteditable="true">${dados.setor || ""}</td>
             <td contenteditable="true">${dados.descricao || ""}</td>
-            <td class="campo-arquivo upload-slot">${campoComArquivo(dados.lux)}</td>
-            <td class="campo-arquivo upload-slot">${campoComArquivo(dados.ruido)}</td>
-            <td class="campo-arquivo upload-slot">${campoComArquivo(dados.temperatura)}</td>
+            <td class="campo-arquivo upload-slot">${campoComArquivo(dados.lux, dados.imgIdLux)}</td>
+            <td class="campo-arquivo upload-slot">${campoComArquivo(dados.ruido, dados.imgIdRuido)}</td>
+            <td class="campo-arquivo upload-slot">${campoComArquivo(dados.temperatura, dados.imgIdTemperatura)}</td>
             <td contenteditable="true">${dados.observacao || ""}</td>
             <td><button onclick="removerLinha(this)">X</button></td>
         </tr>
@@ -259,7 +521,10 @@ function salvarTabelaSetores() {
             lux: colunas[3].querySelector(".editavel").innerText,
             ruido: colunas[4].querySelector(".editavel").innerText,
             temperatura: colunas[5].querySelector(".editavel").innerText,
-            observacao: colunas[6].innerText
+            observacao: colunas[6].innerText,
+            imgIdLux: colunas[3].querySelector("input[type='file']")?.dataset.imgId || "",
+            imgIdRuido: colunas[4].querySelector("input[type='file']")?.dataset.imgId || "",
+            imgIdTemperatura: colunas[5].querySelector("input[type='file']")?.dataset.imgId || ""
         });
     });
 
@@ -281,6 +546,7 @@ function restaurarTabelaSetores() {
 
 // ======================================
 // TABELAS SIMPLES (BANHEIROS E BEBEDOUROS)
+// Estrutura idêntica: foto + observação + remover
 // ======================================
 
 function criarLinhaSimples(dados = {}) {
@@ -297,19 +563,17 @@ function criarLinhaSimples(dados = {}) {
         <td><button onclick="removerLinha(this)">X</button></td>
     `;
 
-    if (dados.imagem) {
-        const input = tr.querySelector("input[type='file']");
-        const td = tr.querySelector(".campo-arquivo-grande");
+    const input = tr.querySelector("input[type='file']");
 
-        input.dataset.imagem = dados.imagem;
-
-        const img = document.createElement("img");
-        img.className = "foto-local";
-        img.src = dados.imagem;
-        img.title = "Clique para trocar a foto";
-        img.onclick = () => input.click();
-
-        td.insertBefore(img, td.firstChild);
+    if (dados.imgId) {
+        // Formato novo: apenas o ID estável, a imagem é restaurada
+        // depois via restaurarImagens().
+        input.dataset.imgId = dados.imgId;
+    } else if (dados.imagem) {
+        // Formato antigo (base64 embutido no item). Guardamos
+        // temporariamente para restaurarImagens() migrar para o
+        // IndexedDB e trocar pelo ID estável.
+        input.dataset.legado = dados.imagem;
     }
 
     return tr;
@@ -329,7 +593,7 @@ function salvarTabelaSimples(tabelaId, storageKey) {
     document.querySelectorAll(`#${tabelaId} tr`).forEach(linha => {
         dados.push({
             observacao: linha.cells[1].textContent.trim(),
-            imagem: linha.querySelector("input[type='file']")?.dataset.imagem || ""
+            imgId: linha.querySelector("input[type='file']")?.dataset.imgId || ""
         });
     });
 
@@ -362,9 +626,11 @@ function restaurarTabelaBebedouros() { restaurarTabelaSimples("tabela-bebedouros
 
 // ======================================
 // GALERIA DE FOTOS - OBSERVAÇÕES GERAIS
+// Cards em grade, sem numeração/observação individual,
+// tamanho padronizado via CSS (.foto-obs)
 // ======================================
 
-function criarCardFotoObservacao(imagemBase64 = "") {
+function criarCardFotoObservacao(valor = "") {
     const card = document.createElement("div");
     card.className = "foto-obs-card upload-slot";
 
@@ -376,17 +642,16 @@ function criarCardFotoObservacao(imagemBase64 = "") {
         </label>
     `;
 
-    if (imagemBase64) {
-        const input = card.querySelector("input[type='file']");
-        input.dataset.imagem = imagemBase64;
+    const input = card.querySelector("input[type='file']");
 
-        const img = document.createElement("img");
-        img.className = "foto-obs";
-        img.src = imagemBase64;
-        img.title = "Clique para trocar a foto";
-        img.onclick = () => input.click();
-
-        card.insertBefore(img, card.firstChild);
+    if (valor) {
+        if (String(valor).startsWith("data:")) {
+            // Formato antigo (base64 direto) - migrado por restaurarImagens().
+            input.dataset.legado = valor;
+        } else {
+            // Formato novo: ID estável.
+            input.dataset.imgId = valor;
+        }
     }
 
     return card;
@@ -404,6 +669,9 @@ function removerFotoObservacao(botao) {
     const card = botao.closest(".foto-obs-card");
     if (!card) return;
 
+    const input = card.querySelector("input[type='file']");
+    if (input?.dataset.imgId) removerImagem(input.dataset.imgId);
+
     card.remove();
     salvarAutomaticamente();
 }
@@ -414,7 +682,7 @@ function salvarFotosObservacoes() {
     document
         .querySelectorAll("#galeria-observacoes .foto-obs-card input[type='file']")
         .forEach(input => {
-            if (input.dataset.imagem) fotos.push(input.dataset.imagem);
+            if (input.dataset.imgId) fotos.push(input.dataset.imgId);
         });
 
     localStorage.setItem("fotosObservacoes", JSON.stringify(fotos));
@@ -434,6 +702,8 @@ function restaurarFotosObservacoes() {
 
 // ======================================
 // AUTO-AJUSTE DE ALTURA DO TEXTAREA
+// Garante que o texto digitado nunca fique escondido dentro da
+// caixa (nem na tela, nem na hora de imprimir/gerar o PDF)
 // ======================================
 
 function autoAjustarTextarea(campo) {
@@ -478,12 +748,9 @@ function salvarAutomaticamente() {
 
     localStorage.setItem("sstAutoSave", JSON.stringify(dados));
 
-    const imagens = [];
-    document.querySelectorAll("input[type='file']").forEach(input => {
-        imagens.push(input.dataset.imagem || "");
-    });
-    localStorage.setItem("imagensSST", JSON.stringify(imagens));
-
+    // As imagens não são mais salvas aqui: cada uma vai para o
+    // IndexedDB (ou reserva em localStorage) no momento do upload,
+    // e cada tabela guarda apenas o ID estável da foto.
     salvarTabelaSetores();
     salvarTabelaExtintores();
     salvarTabelaBanheiros();
@@ -517,7 +784,9 @@ function restaurarDados() {
 // SUBSTITUIÇÃO TEMPORÁRIA DE TEXTAREA POR DIV (SÓ NA GERAÇÃO DO PDF)
 // ======================================
 
-
+// Cria uma <div> "gêmea" de cada <textarea>, com o mesmo texto e o
+// mesmo visual (fonte, espaçamento, borda), e a coloca no lugar da
+// textarea antes da captura do html2canvas.
 function substituirTextareasPorDivs(container) {
     const substituicoes = [];
 
@@ -573,7 +842,9 @@ function gerarPDF() {
         botao.textContent = "⏳ Gerando PDF...";
     }
 
-
+    // Esconde botões e ícones de anexo removendo-os de verdade do
+    // layout (display:none) só durante a geração, para não sobrar
+    // espaço vazio nem "fantasma" no cálculo de altura do PDF
     const elementosOcultos = areaPDF.querySelectorAll("button, .btn-arquivo");
     const estilosOriginais = [];
 
@@ -582,7 +853,12 @@ function gerarPDF() {
         el.style.display = "none";
     });
 
-
+    // O html2canvas não desenha corretamente o texto de <textarea>
+    // (usa seu próprio cálculo de quebra de linha, diferente do
+    // navegador), o que fazia trechos das Observações Gerais sumirem
+    // ou saírem cortados no PDF. Solução: trocar temporariamente cada
+    // textarea por uma <div> com o mesmo texto e mesmo estilo — divs
+    // são renderizadas com fidelidade — e desfazer a troca depois.
     const substituicoesTextarea = substituirTextareasPorDivs(areaPDF);
 
     const restaurar = () => {
@@ -598,7 +874,11 @@ function gerarPDF() {
         }
     };
 
-
+    // Dá tempo do navegador aplicar o display:none acima (reflow) antes
+    // de "tirar a foto" da tela. Sem isso, em telas mais lentas o
+    // html2canvas às vezes captura o layout no meio da troca de estilo,
+    // e o ícone 📎 (que a fonte do PDF não sabe desenhar) aparece
+    // corrompido como "Ø=ÜÎ" no relatório final.
     requestAnimationFrame(() => requestAnimationFrame(() => {
         const escala = 2; // resolução da captura (mantém o PDF nítido)
 
@@ -619,7 +899,12 @@ function gerarPDF() {
     }));
 }
 
-
+// Em vez de deixar o jsPDF "reconstruir" o texto página a página
+// (autoPaging: "text" — a causa das colunas desalinhadas e cabeçalhos
+// bugados em relatórios maiores), tiramos UMA captura fiel do relatório
+// inteiro e fatiamos essa imagem em páginas A4, sempre cortando em um
+// ponto seguro: nunca no meio de uma linha de tabela, de uma foto ou
+// de uma seção.
 function montarPdfComQuebrasSeguras(canvas, escala) {
     const { jsPDF } = window.jspdf;
 
@@ -675,7 +960,11 @@ function montarPdfComQuebrasSeguras(canvas, escala) {
     pdf.save("relatorio_sst.pdf");
 }
 
-
+// Lista, em pixels da captura (canvas), todas as posições onde é seguro
+// cortar a página: início e fim de cada seção (.container), de cada
+// linha de tabela (tr) e de cada foto da galeria de observações
+// (.foto-obs-card). Assim o corte de página nunca cai no meio desses
+// elementos.
 function calcularQuebrasSeguras(container, fatorEscala) {
     const elementos = container.querySelectorAll(".container, tr, .foto-obs-card");
     const topoContainer = container.getBoundingClientRect().top;
@@ -699,11 +988,16 @@ document.addEventListener("DOMContentLoaded", () => {
     restaurarDados();
     restaurarTabelaSetores();
     restaurarTabelaExtintores();
-    ativarUploadImagens();
-    restaurarImagens();
     restaurarTabelaBanheiros();
     restaurarTabelaBebedouros();
     restaurarFotosObservacoes();
+    ativarUploadImagens();
+
+    // Executa por último, depois que todas as linhas/cards já existem
+    // no DOM, para poder restaurar (e, se necessário, migrar) a foto
+    // de cada campo pelo seu ID estável.
+    restaurarImagens();
+
     ativarAutoAjusteTextareas();
 
     document.addEventListener("input", salvarAutomaticamente);
