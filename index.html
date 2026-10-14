@@ -6,7 +6,7 @@
     <title>Levantamento Ambiental SST</title>
 
     <!-- CSS -->
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=2.0">
 </head>
 
 <body>
@@ -245,7 +245,8 @@ Data de Vencimento <br>
     <table>
         <thead>
             <tr>
-                <th>Foto</th>
+                <th>Foto Externa (Porta)</th>
+                <th>Foto Interna</th>
                 <th>Observação</th>
                 <th></th>
             </tr>
@@ -254,7 +255,18 @@ Data de Vencimento <br>
         <tbody id="tabela-banheiros">
             <tr>
                 <td class="campo-arquivo-grande upload-slot">
-                    <label class="btn-foto-grande">
+                    <label class="btn-arquivo btn-foto-grande">
+                        📎
+                        <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            hidden
+                        >
+                    </label>
+                </td>
+                <td class="campo-arquivo-grande upload-slot">
+                    <label class="btn-arquivo btn-foto-grande">
                         📎
                         <input
                             type="file"
@@ -362,7 +374,7 @@ Data de Vencimento <br>
 <!-- JS -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="script.js"></script>
+<script src="script.js?v=2.0"></script>
 
 </body>
 </html>
