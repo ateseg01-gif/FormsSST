@@ -754,6 +754,9 @@ function gerarPDF() {
         }
     };
 
+    // Array que armazenará os pontos de corte calculados diretamente na árvore do html2canvas
+    let quebrasExatasCanvas = [];
+
     // Dá tempo do navegador aplicar o display:none acima (reflow) antes
     // de "tirar a foto" da tela
     requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -766,10 +769,65 @@ function gerarPDF() {
             scrollX: 0,
             scrollY: 0,
             width: isMobile ? larguraDesktop : areaPDF.offsetWidth,
-            windowWidth: isMobile ? larguraDesktop : (document.documentElement.clientWidth || areaPDF.scrollWidth)
+            windowWidth: isMobile ? larguraDesktop : (document.documentElement.clientWidth || areaPDF.scrollWidth),
+            // onclone mede as posições na árvore clonada exata que o html2canvas está desenhando,
+            // garantindo alinhamento pixel a pixel sem desvios de fontes, margens ou tabelas
+            onclone: (clonedDoc, clonedElement) => {
+                const targetEl = clonedElement || clonedDoc.getElementById("areaPDF");
+                if (!targetEl) return;
+
+                const topoContainer = targetEl.getBoundingClientRect().top;
+                const pontos = [0];
+
+                // 1. Início e fim de cada seção (.container)
+                targetEl.querySelectorAll(".container").forEach(el => {
+                    const rect = el.getBoundingClientRect();
+                    const topo = Math.floor((rect.top - topoContainer) * escala);
+                    const fundo = Math.ceil((rect.bottom - topoContainer) * escala);
+                    if (topo > 0) pontos.push(topo);
+                    if (fundo > 0) pontos.push(fundo);
+                });
+
+                // 2. Linhas de tabelas (tbody tr): nunca cortar uma linha ou fotografia ao meio
+                targetEl.querySelectorAll("table").forEach(tabela => {
+                    const rectTab = tabela.getBoundingClientRect();
+                    const topoTab = Math.floor((rectTab.top - topoContainer) * escala);
+                    if (topoTab > 0) pontos.push(topoTab);
+
+                    const linhasCorpo = tabela.querySelectorAll("tbody tr");
+                    linhasCorpo.forEach((linha, indice) => {
+                        const rect = linha.getBoundingClientRect();
+                        // Math.floor para o topo garante que a quebra ocorra rigorosamente antes da linha
+                        const topoLinha = Math.floor((rect.top - topoContainer) * escala);
+
+                        // Para a primeira linha, o corte seguro deve ser antes da tabela (topoTab)
+                        // para não deixar o thead isolado no rodapé da página anterior
+                        if (indice > 0 && topoLinha > 0) {
+                            pontos.push(topoLinha);
+                        }
+
+                        // Para a última linha, registra o término da tabela
+                        if (indice === linhasCorpo.length - 1) {
+                            const fundoTabela = Math.ceil((rect.bottom - topoContainer) * escala);
+                            if (fundoTabela > 0) pontos.push(fundoTabela);
+                        }
+                    });
+                });
+
+                // 3. Cards individuais da galeria de fotos de observações
+                targetEl.querySelectorAll(".foto-obs-card").forEach(card => {
+                    const rect = card.getBoundingClientRect();
+                    const topo = Math.floor((rect.top - topoContainer) * escala);
+                    const fundo = Math.ceil((rect.bottom - topoContainer) * escala);
+                    if (topo > 0) pontos.push(topo);
+                    if (fundo > 0) pontos.push(fundo);
+                });
+
+                quebrasExatasCanvas = Array.from(new Set(pontos)).sort((a, b) => a - b);
+            }
         })
             .then((canvas) => {
-                montarPdfComQuebrasSeguras(canvas);
+                montarPdfComQuebrasSeguras(canvas, quebrasExatasCanvas);
                 restaurar();
             })
             .catch((erro) => {
@@ -783,7 +841,7 @@ function gerarPDF() {
 // Fatiamento do canvas em páginas A4 com cálculo de quebra segura baseado
 // nas posições reais dos elementos no DOM, impedindo que linhas de tabelas,
 // blocos de fotos e observações sejam cortados horizontalmente ao meio.
-function montarPdfComQuebrasSeguras(canvas) {
+function montarPdfComQuebrasSeguras(canvas, quebrasSeguras) {
     const { jsPDF } = window.jspdf;
 
     const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait", compress: true });
@@ -795,11 +853,12 @@ function montarPdfComQuebrasSeguras(canvas) {
     const pxPorMm = canvas.width / larguraUtil;
     const alturaPaginaPx = alturaUtilMm * pxPorMm;
 
-    // Fator de escala vertical real entre a altura capturada no canvas e a altura do elemento no DOM
-    const alturaDom = areaPDF.getBoundingClientRect().height || areaPDF.offsetHeight;
-    const fatorEscalaY = alturaDom > 0 ? (canvas.height / alturaDom) : 2;
-
-    const quebrasSeguras = calcularQuebrasSeguras(areaPDF, fatorEscalaY);
+    // Fallback de segurança se onclone não tiver sido executado
+    if (!quebrasSeguras || quebrasSeguras.length <= 1) {
+        const alturaDom = areaPDF.getBoundingClientRect().height || areaPDF.offsetHeight;
+        const fatorEscalaY = alturaDom > 0 ? (canvas.height / alturaDom) : 2;
+        quebrasSeguras = calcularQuebrasSeguras(areaPDF, fatorEscalaY);
+    }
 
     let yAtual = 0;
     let primeiraPagina = true;
@@ -841,12 +900,7 @@ function montarPdfComQuebrasSeguras(canvas) {
     pdf.save("relatorio_sst.pdf");
 }
 
-// Lista, em pixels reais da imagem gerada no canvas, todas as posições
-// onde é seguro realizar a quebra de página:
-// - Início e fim de seções (.container)
-// - Topo de tabelas (para manter cabeçalho junto à primeira linha)
-// - Linhas inteiras de tabelas (tbody tr), mantendo fotos e observações sempre juntas
-// - Cards individuais de fotos da galeria (.foto-obs-card)
+// Fallback de cálculo de quebras caso onclone não esteja disponível
 function calcularQuebrasSeguras(container, fatorEscalaY) {
     const topoContainer = container.getBoundingClientRect().top;
     const quebras = new Set([0]);
@@ -854,8 +908,8 @@ function calcularQuebrasSeguras(container, fatorEscalaY) {
     // 1. Início e fim de cada seção (.container)
     container.querySelectorAll(".container").forEach(el => {
         const rect = el.getBoundingClientRect();
-        const topo = Math.round((rect.top - topoContainer) * fatorEscalaY);
-        const fundo = Math.round((rect.bottom - topoContainer) * fatorEscalaY);
+        const topo = Math.floor((rect.top - topoContainer) * fatorEscalaY);
+        const fundo = Math.ceil((rect.bottom - topoContainer) * fatorEscalaY);
 
         if (topo > 0) quebras.add(topo);
         if (fundo > 0) quebras.add(fundo);
@@ -864,22 +918,22 @@ function calcularQuebrasSeguras(container, fatorEscalaY) {
     // 2. Linhas de tabelas (tbody tr): nunca cortar uma linha ou fotografia ao meio
     container.querySelectorAll("table").forEach(tabela => {
         const rectTabela = tabela.getBoundingClientRect();
-        const topoTabela = Math.round((rectTabela.top - topoContainer) * fatorEscalaY);
+        const topoTabela = Math.floor((rectTabela.top - topoContainer) * fatorEscalaY);
         if (topoTabela > 0) quebras.add(topoTabela);
 
         const linhasCorpo = tabela.querySelectorAll("tbody tr");
         linhasCorpo.forEach((linha, indice) => {
             const rect = linha.getBoundingClientRect();
-            const topoLinha = Math.round((rect.top - topoContainer) * fatorEscalaY);
-            const fundoLinha = Math.round((rect.bottom - topoContainer) * fatorEscalaY);
+            const topoLinha = Math.floor((rect.top - topoContainer) * fatorEscalaY);
 
             // Para a primeira linha, preferir quebrar antes da tabela para não deixar
             // o thead isolado no rodapé da página anterior
             if (indice > 0 && topoLinha > 0) {
                 quebras.add(topoLinha);
             }
-            if (fundoLinha > 0) {
-                quebras.add(fundoLinha);
+            if (indice === linhasCorpo.length - 1) {
+                const fundoTabela = Math.ceil((rect.bottom - topoContainer) * fatorEscalaY);
+                if (fundoTabela > 0) quebras.add(fundoTabela);
             }
         });
     });
@@ -887,8 +941,8 @@ function calcularQuebrasSeguras(container, fatorEscalaY) {
     // 3. Cards individuais da galeria de fotos de observações
     container.querySelectorAll(".foto-obs-card").forEach(card => {
         const rect = card.getBoundingClientRect();
-        const topo = Math.round((rect.top - topoContainer) * fatorEscalaY);
-        const fundo = Math.round((rect.bottom - topoContainer) * fatorEscalaY);
+        const topo = Math.floor((rect.top - topoContainer) * fatorEscalaY);
+        const fundo = Math.ceil((rect.bottom - topoContainer) * fatorEscalaY);
 
         if (topo > 0) quebras.add(topo);
         if (fundo > 0) quebras.add(fundo);
